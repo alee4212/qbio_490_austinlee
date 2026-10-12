@@ -225,15 +225,15 @@ patient_5$age_at_diagnosis
 
 patient_1 <- clinic[clinic$Tumor_Sample_Barcode == "TCGA-3C-AAAU", ]
 patient_1_age_at_last_followup <-
-  as.numeric(patient_1$age_at_diagnosis) +
-  as.numeric(patient_1$last_contact_days_to) / 365.25
+  (abs(as.numeric(patient_1$birth_days_to)) +
+    as.numeric(patient_1$last_contact_days_to)) / 365.25
 patient_1_age_at_last_followup
 ```
 
 1. There are **1,097 rows and 112 columns**.
 2. `gender` is stored as a **character** vector.
 3. Patient TCGA-4H-AAAK was **50 years old** at diagnosis.
-4. Patient TCGA-3C-AAAU was approximately **65.3 years old** at the last follow-up (55 years at diagnosis plus 3,767 follow-up days).
+4. Patient TCGA-3C-AAAU was approximately **65.6 years old** at the last follow-up. This uses the 20,211 days from birth to diagnosis plus 3,767 days from diagnosis to the last contact.
 
 View the column and row names. What two commands should you use?
 
@@ -337,13 +337,16 @@ The heading says “under 35,” but the supplied variable name and the followin
 To create a KM plot in R, we first need to load some required packages.
 
 ```{r packages, message=FALSE, warning=FALSE}
-required_packages <- c("survival", "survminer", "ggplot2")
-missing_packages <- required_packages[
-  !vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)
-]
+if (!requireNamespace("survival", quietly = TRUE)) {
+  install.packages("survival")
+}
 
-if (length(missing_packages) > 0) {
-  stop("Install these packages before knitting: ", paste(missing_packages, collapse = ", "))
+if (!requireNamespace("survminer", quietly = TRUE)) {
+  install.packages("survminer")
+}
+
+if (!requireNamespace("ggplot2", quietly = TRUE)) {
+  install.packages("ggplot2")
 }
 
 ```
