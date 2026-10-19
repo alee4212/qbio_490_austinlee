@@ -13,6 +13,7 @@ output: html_notebook
 - This completed R Notebook is stored in `week6_genomics/Introduction_to_MAF.Rmd`.
 - Every figure is saved in `week6_genomics/figures/` with a descriptive name.
 - The analysis uses TCGA Breast Invasive Carcinoma (TCGA-BRCA) clinical and masked somatic mutation data.
+- All mutation-frequency, contingency-table, and survival analyses use the same cohort: patients represented in the nonsynonymous MAF data.
 
 ## Pre-assignment: packages, clinical data, and the MAF object
 
@@ -191,6 +192,8 @@ clinic$Histology_Group <- factor(
 )
 
 # Match patient-level clinical barcodes to the sample barcodes stored in the MAF.
+# Using this map consistently prevents the contingency and survival analyses from
+# silently changing denominators relative to the MAF-based plots.
 maf_data <- as.data.frame(MAF_object@data)
 maf_sample_map <- unique(data.frame(
   MAF_Sample = as.character(maf_data$Tumor_Sample_Barcode),
@@ -322,6 +325,27 @@ fisher_summary <- data.frame(
   conf_high = cdh1_fisher$conf.int[[2]]
 )
 fisher_summary
+
+fisher_conclusion <- if (cdh1_fisher$p.value < 0.05) {
+  sprintf(
+    paste0(
+      "CDH1 mutation status and histology are associated ",
+      "(odds ratio %.2f, two-sided Fisher p = %.3g)."
+    ),
+    unname(cdh1_fisher$estimate),
+    cdh1_fisher$p.value
+  )
+} else {
+  sprintf(
+    paste0(
+      "No statistically significant association was detected ",
+      "(odds ratio %.2f, two-sided Fisher p = %.3g)."
+    ),
+    unname(cdh1_fisher$estimate),
+    cdh1_fisher$p.value
+  )
+}
+fisher_conclusion
 ```
 
 ```{r mosaic-plot}
@@ -354,11 +378,10 @@ dev.off()
 ```{r fisher-interpretation, echo=TRUE}
 # Interpretation:
 # The odds ratio is far above 1, so CDH1 mutation is strongly enriched in ILC.
-# In the matched public TCGA-BRCA validation run, the table was:
-#   IDC: 18 mutated and 760 wild-type tumors
-#   ILC: 104 mutated and 85 wild-type tumors
-# This produced OR = 51.66 and p = 4.30e-67.
-# The tiny p-value provides overwhelming evidence that CDH1 mutation status and
+# The exact cohort counts, odds ratio, confidence interval, and p-value are
+# calculated above rather than hard-coded, so they remain consistent when the
+# GDC MAF is updated. The very small p-value provides overwhelming evidence that
+# CDH1 mutation status and
 # IDC/ILC histology are not independent. Statistical association alone does not
 # prove causation, but the result agrees with the known role of E-cadherin loss
 # in lobular tumor morphology and biology.
@@ -515,13 +538,27 @@ log_rank_p_value <- pchisq(
 
 summary(cdh1_survival_fit)
 log_rank_p_value
+
+survival_conclusion <- if (log_rank_p_value < 0.05) {
+  sprintf(
+    "The CDH1 groups differ significantly by log-rank test (p = %.3g).",
+    log_rank_p_value
+  )
+} else {
+  sprintf(
+    "No significant overall-survival difference was detected (log-rank p = %.3g).",
+    log_rank_p_value
+  )
+}
+survival_conclusion
 ```
 
 ```{r survival-interpretation, echo=TRUE}
 # Interpretation:
 # The Kaplan-Meier curves do not show a clear overall-survival separation.
-# In the matched public TCGA-BRCA validation run, the log-rank p-value was 0.581,
-# so the difference was not statistically significant at alpha = 0.05.
+# The exact log-rank p-value is calculated above from the same MAF-represented
+# cohort used elsewhere. For this cohort it is greater than 0.05, so the
+# difference is not statistically significant at alpha = 0.05.
 #
 # This is reasonable even though CDH1 is strongly associated with ILC: CDH1 loss
 # primarily defines a histologic/adhesion phenotype, while overall survival is
