@@ -1,0 +1,344 @@
+---
+title: "Intro to Transcriptomics"
+author: "Austin Lee"
+date: "2026-10-26"
+output: html_notebook
+---
+
+This assignment has two main parts. Part 1 loads and inspects TCGA transcriptomic data and extracts clinical, gene-annotation, and expression tables. Part 2 uses those tables for differential-expression analysis.
+
+## Deliverables
+
+- This completed R notebook.
+- A descriptively named volcano plot in the same `week7_transcriptomics` folder.
+
+## Part 1
+
+### Setup
+
+The analysis directory can be supplied through the `QBIO490_ANALYSIS_DIR` environment variable. If it is not supplied, the notebook uses an `analysis_data` directory in the user's home directory.
+
+```{r setup, message=FALSE}
+notebook_path <- knitr::current_input(dir = TRUE)
+output_dir <- if (nzchar(notebook_path)) dirname(notebook_path) else getwd()
+
+analysis_dir <- Sys.getenv(
+  "QBIO490_ANALYSIS_DIR",
+  unset = file.path(path.expand("~"), "analysis_data")
+)
+dir.create(analysis_dir, recursive = TRUE, showWarnings = FALSE)
+knitr::opts_knit$set(root.dir = normalizePath(analysis_dir, mustWork = TRUE))
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+```
+
+```{r package-setup}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+
+needed <- c("TCGAbiolinks", "SummarizedExperiment", "DESeq2", "EnhancedVolcano")
+missing <- needed[!vapply(needed, requireNamespace, logical(1), quietly = TRUE)]
+if (length(missing) > 0) BiocManager::install(missing, ask = FALSE)
+
+library(TCGAbiolinks)
+library(SummarizedExperiment)
+```
+
+### Load the RNA-seq data
+
+```{r load-rna-se}
+rna_query <- GDCquery(
+  project = "TCGA-BRCA",
+  data.category = "Transcriptome Profiling",
+  data.type = "Gene Expression Quantification",
+  workflow.type = "STAR - Counts"
+)
+
+# Download the open-access files before preparing the SummarizedExperiment.
+GDCdownload(rna_query, directory = analysis_dir, files.per.chunk = 20)
+rna_se <- GDCprepare(rna_query, directory = analysis_dir)
+```
+
+### 1. SummarizedExperiment basics
+
+```{r exercise-1-1}
+head(rna_se)
+str(rna_se)
+```
+
+```{r exercise-1-2}
+dim(colData(rna_se))
+dim(rowData(rna_se))
+dim(assay(rna_se, "unstranded"))
+```
+
+For the Fall 2026 snapshot used for this assignment, the dimensions are:
+
+- `colData`: 1,231 rows by 94 columns.
+- `rowData`: 60,660 rows by 10 columns.
+- `unstranded`: 60,660 rows by 1,231 columns.
+
+The rows of `colData` are TCGA sample barcodes and its columns are clinical/sample metadata variables. The rows of `rowData` are genes and its columns are gene annotations. In the unstranded assay, rows are genes and columns are TCGA samples.
+
+```{r exercise-1-3}
+rownames(colData(rna_se))
+colnames(colData(rna_se))
+
+rownames(rowData(rna_se))
+colnames(rowData(rna_se))
+
+rownames(assay(rna_se, "unstranded"))
+colnames(assay(rna_se, "unstranded"))
+```
+
+### 2. `colData`: clinical information
+
+```{r exercise-2-1}
+colData(rna_se)$age_at_index[1:15]
+```
+
+```{r exercise-2-2}
+summary(colData(rna_se)$age_at_index)
+```
+
+The summary in the assignment snapshot is: minimum 26, first quartile 48, median 58, mean 58.28, third quartile 67, maximum 89, and one missing value.
+
+```{r exercise-2-3-2-6}
+rna_clinical <- as.data.frame(colData(rna_se))
+
+nested_columns <- c(
+  "treatments", "primary_site", "disease_type", "sites_of_involvement"
+)
+rna_clinical <- rna_clinical[, !(colnames(rna_clinical) %in% nested_columns)]
+
+age_NA_mask <- !is.na(rna_clinical$age_at_index)
+rna_clinical <- rna_clinical[age_NA_mask, , drop = FALSE]
+summary(rna_clinical$age_at_index)
+```
+
+### 3. `rowData`: gene information
+
+```{r exercise-3-1}
+head(rowData(rna_se))
+```
+
+```{r exercise-3-2-3-3}
+rna_genes <- as.data.frame(rowData(rna_se))
+```
+
+### 4. Assays: RNA-expression data
+
+The six assay names are `unstranded`, `stranded_first`, `stranded_second`, `tpm_unstrand`, `fpkm_unstrand`, and `fpkm_uq_unstrand`.
+
+```{r exercise-4-1}
+assayNames(rna_se)
+```
+
+```{r exercise-4-2-4-3}
+rna_counts <- as.data.frame(assay(rna_se, "unstranded"))
+rna_counts <- rna_counts[, age_NA_mask, drop = FALSE]
+
+# First 15 genes and first 5 samples
+rna_counts[1:15, 1:5]
+```
+
+### 5. Clean the three data frames
+
+```{r exercise-5-1}
+rownames(rna_clinical)
+colnames(rna_clinical)
+```
+
+```{r exercise-5-4}
+rna_clinical$age_category <- ifelse(
+  rna_clinical$age_at_index <= 58,
+  "young",
+  "old"
+)
+```
+
+```{r exercise-5-5-5-6}
+rownames(rna_genes)
+colnames(rna_genes)
+
+# gene_id is unique, whereas gene_name may contain duplicates.
+stopifnot(!anyDuplicated(rna_genes$gene_id))
+rownames(rna_genes) <- rna_genes$gene_id
+```
+
+```{r exercise-5-7-5-9}
+rownames(rna_counts)
+colnames(rna_counts)
+
+rownames(rna_counts) <- rownames(rna_genes)
+colnames(rna_counts) <- rownames(rna_clinical)
+
+rownames(rna_counts)
+colnames(rna_counts)
+```
+
+### 6. Save the cleaned data
+
+```{r exercise-6-1}
+write.csv(
+  rna_clinical,
+  file.path(analysis_dir, "brca_rna_clinical_data.csv"),
+  row.names = TRUE
+)
+```
+
+```{r exercise-6-2}
+write.csv(
+  rna_genes,
+  file.path(analysis_dir, "brca_rna_gene_data.csv"),
+  row.names = FALSE
+)
+```
+
+```{r exercise-6-3}
+write.csv(
+  rna_counts,
+  file.path(analysis_dir, "brca_rna_count_data.csv"),
+  row.names = TRUE
+)
+```
+
+## Part 2
+
+### 1. Read the saved tables
+
+```{r part-2-read-data}
+rna_clinical <- read.csv(
+  file.path(analysis_dir, "brca_rna_clinical_data.csv"),
+  row.names = 1,
+  check.names = FALSE
+)
+rna_genes <- read.csv(
+  file.path(analysis_dir, "brca_rna_gene_data.csv"),
+  check.names = FALSE
+)
+rna_counts <- read.csv(
+  file.path(analysis_dir, "brca_rna_count_data.csv"),
+  row.names = 1,
+  check.names = FALSE
+)
+```
+
+### 2. Prepare the model variables and filter genes
+
+I control for age as a continuous covariate. I do not include PAM50 subtype because the normal samples generally do not have a tumor-intrinsic PAM50 subtype; coding those missing values as a level would make subtype strongly confounded with sample definition.
+
+```{r part-2-prepare}
+valid_definition <- rna_clinical$definition %in% c(
+  "Primary solid Tumor", "Solid Tissue Normal"
+)
+valid_age <- !is.na(rna_clinical$age_at_index)
+rna_clinical <- rna_clinical[valid_definition & valid_age, , drop = FALSE]
+
+# Keep only samples present in both data objects, and place them in the same order.
+common_samples <- intersect(colnames(rna_counts), rownames(rna_clinical))
+rna_counts <- rna_counts[, common_samples, drop = FALSE]
+rna_clinical <- rna_clinical[common_samples, , drop = FALSE]
+stopifnot(identical(colnames(rna_counts), rownames(rna_clinical)))
+
+rna_clinical$age_at_index <- as.numeric(rna_clinical$age_at_index)
+rna_clinical$definition <- relevel(
+  factor(rna_clinical$definition),
+  ref = "Solid Tissue Normal"
+)
+
+# Keep genes whose total count across all retained samples is at least 1,000.
+keep_genes <- rowSums(rna_counts, na.rm = TRUE) >= 1000
+rna_counts <- rna_counts[keep_genes, , drop = FALSE]
+rna_genes <- rna_genes[match(rownames(rna_counts), rna_genes$gene_id), , drop = FALSE]
+
+table(rna_clinical$definition)
+summary(rna_clinical$age_at_index)
+dim(rna_counts)
+```
+
+### 3. Differential-expression analysis
+
+```{r part-2-deseq2}
+library(DESeq2)
+
+count_matrix <- as.matrix(rna_counts)
+storage.mode(count_matrix) <- "integer"
+
+dds <- DESeqDataSetFromMatrix(
+  countData = count_matrix,
+  colData = rna_clinical,
+  design = ~ age_at_index + definition
+)
+
+dds_obj <- DESeq(dds)
+resultsNames(dds_obj)
+
+results <- results(
+  dds_obj,
+  format = "DataFrame",
+  contrast = c("definition", "Primary solid Tumor", "Solid Tissue Normal")
+)
+results <- as.data.frame(results)
+
+write.csv(
+  results,
+  file.path(analysis_dir, "brca_DESeq_results.csv"),
+  row.names = TRUE
+)
+saveRDS(results, file.path(analysis_dir, "brca_DESeq_results.rds"))
+```
+
+```{r part-2-annotate-results}
+results$gene_name <- rna_genes$gene_name[
+  match(rownames(results), rna_genes$gene_id)
+]
+```
+
+### 4. Volcano plot
+
+```{r part-2-volcano, fig.width=8, fig.height=6}
+library(EnhancedVolcano)
+
+volcano_plot <- EnhancedVolcano(
+  results,
+  lab = results$gene_name,
+  x = "log2FoldChange",
+  y = "padj",
+  title = "TCGA-BRCA: Primary Tumor vs Normal Tissue",
+  subtitle = "DESeq2 model adjusted for age at index",
+  pointSize = 1.0,
+  labSize = 4.0,
+  pCutoff = 0.05,
+  FCcutoff = 1.0,
+  drawConnectors = TRUE,
+  widthConnectors = 0.4
+)
+
+volcano_plot
+
+ggsave(
+  file.path(output_dir, "TCGA_BRCA_tumor_vs_normal_volcano.png"),
+  plot = volcano_plot,
+  width = 8,
+  height = 6,
+  dpi = 300
+)
+
+ggsave(
+  file.path(output_dir, "TCGA_BRCA_tumor_vs_normal_volcano.svg"),
+  plot = volcano_plot,
+  width = 8,
+  height = 6
+)
+```
+
+### 5. Interpretation
+
+- **Top-right genes:** statistically significant and upregulated in primary tumor relative to normal tissue; they have positive log2 fold changes and small adjusted p-values.
+- **Bottom-right genes:** higher estimated expression in tumor, but not statistically significant after multiple-testing correction.
+- **Top-left genes:** statistically significant and downregulated in primary tumor relative to normal tissue; they have negative log2 fold changes and small adjusted p-values.
+- **Bottom-left genes:** lower estimated expression in tumor, but not statistically significant after multiple-testing correction.
+- **Top-middle genes:** statistically significant but with small fold changes, so the evidence for a difference is strong even though the estimated effect size is modest.
+- **Bottom-middle genes:** neither statistically significant nor meaningfully changed in magnitude.
+
+Positive fold change is defined by the specified contrast, `Primary solid Tumor / Solid Tissue Normal`; reversing the contrast would reverse the left/right interpretation.
