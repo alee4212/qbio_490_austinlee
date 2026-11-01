@@ -1,0 +1,195 @@
+---
+title: "QBIO 490 Week 8: TCGA-BRCA Methylation"
+author: "Austin Lee"
+date: "November 2, 2026"
+output:
+  html_notebook:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, message=FALSE, warning=FALSE}
+library(data.table)
+library(limma)
+library(DESeq2)
+library(ggplot2)
+
+knitr::opts_chunk$set(echo = TRUE, fig.align = "center")
+results_dir <- "results"
+figures_dir <- "figures"
+```
+
+## Purpose and data
+
+This notebook asks whether metastatic and primary solid-tumor TCGA-BRCA samples differ in DNA methylation and whether hypermethylation coincides with lower transcription for a gene of interest. I used the public TCGA-BRCA Illumina HumanMethylation450 and STAR-count matrices distributed by the [UCSC Xena project](https://xena.ucsc.edu/download-data/). TCGA sample codes `01` and `06` identify primary solid tumors and metastatic tumors, respectively. The methylation comparison includes 785 primary and 5 metastatic samples; the cross-assay RNA comparison includes 782 unique primary and 5 metastatic samples represented in both assays.
+
+The public matrices are too large for GitHub, so this repository contains the complete analysis code, compact result tables, plot data, and all outputs. The full analysis can be rerun after placing the source files in `analysis_data/`.
+
+```{r data-summary}
+analysis_summary <- fread(file.path(results_dir, "analysis_summary.csv"))
+knitr::kable(analysis_summary, col.names = c("Metric", "Value"))
+```
+
+## Data preparation
+
+The following helper extracts the two-digit TCGA sample-type code. I retained only primary (`01`) and metastatic (`06`) samples, aligned all matrices by TCGA barcode, removed duplicate RNA aliquots, and transferred the phenotype from the methylation clinical data to the matched RNA specimens. For methylation, probes with a missing value or without exactly one unambiguous gene assignment were excluded; this left 213,462 CpG probes in the Xena snapshot used here.
+
+```{r helpers}
+sample_code <- function(barcode) {
+  vapply(strsplit(barcode, "-", fixed = TRUE),
+         function(x) substr(x[[4]], 1, 2), character(1))
+}
+```
+
+```{r full-data-preparation, eval=FALSE}
+# Source files:
+# analysis_data/HumanMethylation450.gz
+# analysis_data/illuminaMethyl450_probeMap.tsv
+# analysis_data/TCGA-BRCA.star_counts.tsv.gz
+# analysis_data/gencode.v36.gene_map.tsv
+
+probe_map <- fread("analysis_data/illuminaMethyl450_probeMap.tsv")
+probe_map <- probe_map[
+  gene != "." & gene != "" &
+  !grepl("[,;]", gene) & !grepl("-", gene),
+  .(probe_id = probe, gene_name = gene)
+]
+
+methyl <- fread(cmd = "gzip -dc analysis_data/HumanMethylation450.gz")
+setnames(methyl, 1, "probe_id")
+methyl_codes <- sample_code(names(methyl)[-1])
+methyl <- methyl[, c(1, which(methyl_codes %in% c("01", "06")) + 1), with = FALSE]
+methyl <- methyl[probe_id %in% probe_map$probe_id]
+methyl <- methyl[complete.cases(methyl)]
+methyl[, gene_name := probe_map$gene_name[match(probe_id, probe_map$probe_id)]]
+
+sample_names <- setdiff(names(methyl), c("probe_id", "gene_name"))
+methyl_codes <- sample_code(sample_names)
+methylation_clinical <- data.frame(
+  definition = factor(ifelse(methyl_codes == "06", "Metastatic",
+                             "Primary solid Tumor"),
+                      levels = c("Primary solid Tumor", "Metastatic")),
+  row.names = sample_names
+)
+betas <- as.matrix(methyl[, ..sample_names])
+rownames(betas) <- methyl$probe_id
+
+rna <- fread(cmd = "gzip -dc analysis_data/TCGA-BRCA.star_counts.tsv.gz")
+rna_names <- names(rna)[-1]
+rna_codes <- sample_code(rna_names)
+rna <- rna[, c(1, which(rna_codes %in% c("01", "06")) + 1), with = FALSE]
+rna_names <- names(rna)[-1]
+rna_counts <- round(2^as.matrix(rna[, -1]) - 1)
+rownames(rna_counts) <- rna[[1]]
+colnames(rna_counts) <- rna_names
+
+# Match on the 15-character participant + sample-type key and retain one
+# aliquot per biological sample.
+methyl_keys <- substr(rownames(methylation_clinical), 1, 15)
+rna_keys <- substr(colnames(rna_counts), 1, 15)
+rna_counts <- rna_counts[, !duplicated(rna_keys), drop = FALSE]
+rna_keys <- rna_keys[!duplicated(rna_keys)]
+matched_methyl <- match(rna_keys, methyl_keys)
+rna_counts <- rna_counts[, !is.na(matched_methyl), drop = FALSE]
+matched_methyl <- matched_methyl[!is.na(matched_methyl)]
+rna_clinical <- data.frame(
+  definition = methylation_clinical$definition[matched_methyl],
+  row.names = colnames(rna_counts)
+)
+```
+
+# 1. Naive differential methylation
+
+Beta values were clipped away from zero and one and transformed to M-values, which are better behaved for linear modeling. I fit a limma model for metastatic versus primary tumor at every retained probe. The volcano plot uses Benjamini-Yekutieli (BY) adjusted p-values and marks probes with adjusted p < 0.05 and an absolute M-value difference of at least 1.
+
+```{r methylation-analysis, eval=FALSE}
+betas[betas < 1e-6] <- 1e-6
+betas[betas > 1 - 1e-6] <- 1 - 1e-6
+m_values <- log2(betas / (1 - betas))
+metastatic <- methylation_clinical$definition == "Metastatic"
+
+fit <- eBayes(lmFit(m_values, model.matrix(~ metastatic)))
+methylation_results <- data.table(
+  probe_id = rownames(m_values),
+  gene_name = methyl$gene_name,
+  m_value_difference = fit$coefficients[, "metastaticTRUE"],
+  p_value = fit$p.value[, "metastaticTRUE"]
+)
+methylation_results[, adj_p_value := p.adjust(p_value, method = "BY")]
+methylation_results[, significant :=
+  adj_p_value < 0.05 & abs(m_value_difference) >= 1]
+```
+
+```{r methylation-output, echo=TRUE, out.width="90%"}
+methylation_file <- file.path(
+  results_dir, "methylation_results_metastatic_vs_primary.csv.gz"
+)
+methylation_results <- fread(
+  cmd = paste("gzip -dc", shQuote(methylation_file))
+)
+cat("Significant CpG probes:", sum(methylation_results$significant), "\n")
+knitr::include_graphics(
+  file.path(figures_dir, "01_methylation_volcano_metastatic_vs_primary.png")
+)
+```
+
+**Interpretation.** The volcano plot identifies 412 CpG probes with BY-adjusted p < 0.05 and an absolute metastatic-minus-primary M-value difference of at least 1. Most of these highlighted probes lie on the negative side, suggesting that broad hypomethylation is more prominent than hypermethylation in these five metastatic specimens. A smaller set of probes shows large positive differences, indicating focal hypermethylation that could be relevant to transcriptional repression. However, because only five metastatic specimens are available, these associations are exploratory and should not be interpreted as a population-wide causal effect.
+
+# 2. Methylation status versus transcriptional activity
+
+I recovered integer RNA counts from the Xena `log2(count + 1)` matrix, retained genes with a total count of at least 20, and ran DESeq2 with the phenotype transferred from `methylation_clinical$definition`. Following the homework example, candidate downregulated genes had RNA log2 fold change < -1, while candidate hypermethylated genes had at least one CpG with M-value difference > 1.5. Their intersection contained 24 genes; `CD164L2` was selected because it had the smallest RNA adjusted p-value among the intersecting genes.
+
+```{r rna-analysis, eval=FALSE}
+rna_counts <- rna_counts[rowSums(rna_counts) >= 20, , drop = FALSE]
+dds <- DESeqDataSetFromMatrix(rna_counts, rna_clinical, ~ definition)
+dds <- DESeq(dds)
+de_results <- as.data.table(as.data.frame(results(
+  dds, contrast = c("definition", "Metastatic", "Primary solid Tumor")
+)), keep.rownames = "gene_id")
+
+gene_map <- fread("analysis_data/gencode.v36.gene_map.tsv")
+de_results[, gene_name := gene_map$gene_name[match(gene_id, gene_map$gene_id)]]
+
+downregulated <- unique(de_results[
+  !is.na(log2FoldChange) & log2FoldChange < -1, gene_name
+])
+hypermethylated <- unique(methylation_results[
+  m_value_difference > 1.5, gene_name
+])
+interest_genes <- intersect(downregulated, hypermethylated)
+
+candidate_rna <- de_results[gene_name %in% interest_genes]
+setorder(candidate_rna, padj, -abs(log2FoldChange))
+selected_gene <- candidate_rna$gene_name[1]
+```
+
+```{r candidate-output}
+de_file <- file.path(results_dir, "deseq2_results_metastatic_vs_primary.csv.gz")
+de_results <- fread(cmd = paste("gzip -dc", shQuote(de_file)))
+cd164l2_rna <- de_results[gene_name == "CD164L2",
+  .(gene_name, baseMean, log2FoldChange, pvalue, padj)]
+cd164l2_cpg <- methylation_results[
+  gene_name == "CD164L2" & m_value_difference > 1.5,
+  .(probe_id, gene_name, m_value_difference, p_value, adj_p_value)
+]
+knitr::kable(cd164l2_rna, digits = 4,
+             caption = "CD164L2 differential expression")
+knitr::kable(cd164l2_cpg, digits = 4,
+             caption = "CD164L2 CpG passing the hypermethylation effect threshold")
+```
+
+```{r gene-plots, echo=TRUE, out.width="90%"}
+knitr::include_graphics(c(
+  file.path(figures_dir, "02_selected_gene_rna_expression_boxplot.png"),
+  file.path(figures_dir, "03_selected_gene_cpg_methylation_barplot.png")
+))
+```
+
+**Interpretation.** `CD164L2` expression is lower in metastatic tumors, with a DESeq2 log2 fold change of -3.07 and adjusted p = 0.0125; the expression boxplot shows the same direction despite the small metastatic group. One associated probe, `cg11955474`, has a metastatic-minus-primary M-value difference of 1.67, and the bar plot shows higher mean beta values at several `CD164L2` CpGs in the metastatic samples. Together, the two assays are consistent with increased methylation accompanying reduced `CD164L2` transcription in metastasis, but the analysis does not establish that methylation caused the RNA decrease. The small and highly imbalanced metastatic group, probe-to-gene annotation, tumor composition, and unmodeled clinical covariates are important alternative explanations.
+
+## Reproducibility
+
+```{r session-info}
+sessionInfo()
+```
