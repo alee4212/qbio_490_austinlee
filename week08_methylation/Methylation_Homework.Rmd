@@ -138,7 +138,7 @@ knitr::include_graphics(
 
 # 2. Methylation status versus transcriptional activity
 
-I recovered integer RNA counts from the Xena `log2(count + 1)` matrix, retained genes with a total count of at least 20, and ran DESeq2 with the phenotype transferred from `methylation_clinical$definition`. Following the homework example, candidate downregulated genes had RNA log2 fold change < -1, while candidate hypermethylated genes had at least one CpG with M-value difference > 1.5. Their intersection contained 24 genes; `CD164L2` was selected because it had the smallest RNA adjusted p-value among the intersecting genes.
+I recovered integer RNA counts from the Xena `log2(count + 1)` matrix, retained genes with a total count of at least 20, and ran DESeq2 with the phenotype transferred from `methylation_clinical$definition`. Following the technical tips, candidate downregulated genes had DESeq2 adjusted p < 0.05 and RNA log2 fold change < -1, while candidate hypermethylated genes had at least one CpG with M-value difference > 1.5 as shown in the homework example. Their intersection contained one gene, `CD164L2`, which was therefore selected for the direct comparison.
 
 ```{r rna-analysis, eval=FALSE}
 rna_counts <- rna_counts[rowSums(rna_counts) >= 20, , drop = FALSE]
@@ -152,7 +152,7 @@ gene_map <- fread("analysis_data/gencode.v36.gene_map.tsv")
 de_results[, gene_name := gene_map$gene_name[match(gene_id, gene_map$gene_id)]]
 
 downregulated <- unique(de_results[
-  !is.na(log2FoldChange) & log2FoldChange < -1, gene_name
+  !is.na(padj) & padj < 0.05 & log2FoldChange < -1, gene_name
 ])
 hypermethylated <- unique(methylation_results[
   m_value_difference > 1.5, gene_name
