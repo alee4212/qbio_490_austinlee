@@ -17,4 +17,23 @@ export R_LIBS_USER=/home1/alee4212/R/x86_64-pc-linux-gnu-library/4.5
 
 Rscript -e 'if (!requireNamespace("BiocManager", quietly=TRUE)) install.packages("BiocManager", repos="https://cloud.r-project.org"); BiocManager::install(c("limma", "DESeq2"), ask=FALSE, update=FALSE)'
 
-Rscript /home1/alee4212/qbio_490_austinlee/week08_methylation/carc/week8_carc_pipeline.R
+pipeline=/home1/alee4212/qbio_490_austinlee/week08_methylation/carc/week8_carc_pipeline.R
+pipeline_log=/home1/alee4212/qbio_490_austinlee/week08_methylation/carc_results/carc_pipeline.log
+
+for attempt in 1 2 3 4 5 6 7 8; do
+  echo "CARC pipeline attempt ${attempt}/8"
+  if Rscript "$pipeline"; then
+    exit 0
+  fi
+
+  if grep -q "GDC server down\|api.gdc.cancer.gov/status.*Timeout" "$pipeline_log"; then
+    echo "Temporary GDC outage detected; retrying in 60 seconds."
+    sleep 60
+  else
+    echo "Non-network pipeline failure; not retrying."
+    exit 1
+  fi
+done
+
+echo "GDC remained unavailable after eight attempts."
+exit 1
