@@ -11,7 +11,7 @@
 set -euo pipefail
 
 module purge
-module load ver/2506 gcc/14.3.0 r/4.5.0 gdc-client/2.3
+module load ver/2506 gcc/14.3.0 r/4.5.0
 
 export R_LIBS_USER=/home1/alee4212/R/x86_64-pc-linux-gnu-library/4.5
 
