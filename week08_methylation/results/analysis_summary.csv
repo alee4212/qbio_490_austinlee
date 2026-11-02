@@ -1,12 +1,15 @@
 metric,value
-Methylation primary samples,785
+Execution platform,USC CARC Discovery
+CARC host,b05-04.hpc.usc.edu
+Slurm job ID,13663807
+Methylation primary samples,793
 Methylation metastatic samples,5
-Retained CpG probes,213462
-Significant CpG probes,412
+Retained CpG probes,178810
+Significant CpG probes,225
 RNA primary samples,782
 RNA metastatic samples,5
-Genes after count filter,54036
-Downregulated genes,215
-Hypermethylated genes,239
+Genes after count filter,53494
+Significant downregulated genes,219
+Effect-size hypermethylated genes,249
 Intersecting genes,1
 Selected gene,CD164L2
