@@ -7,7 +7,9 @@ suppressPackageStartupMessages({
   library(ggplot2)
 })
 
-options(timeout = 3600)
+# Keep individual GDC API attempts short enough to fail fast on a stalled
+# connection. GDCdownload is resume-safe and skips files already on disk.
+options(timeout = 120)
 set.seed(490)
 
 home_dir <- "/home1/alee4212"
@@ -55,7 +57,7 @@ methyl_se_path <- file.path(analysis_dir, "brca_methylation450_se.rds")
 if (file.exists(methyl_se_path)) {
   methylation450 <- readRDS(methyl_se_path)
 } else {
-  GDCdownload(methyl_query, directory = gdc_dir, files.per.chunk = 20)
+  GDCdownload(methyl_query, directory = gdc_dir, files.per.chunk = 5)
   cat("\n[2/6] Preparing the GDC methylation SummarizedExperiment\n")
   methylation450 <- GDCprepare(methyl_query, directory = gdc_dir)
   saveRDS(methylation450, methyl_se_path, compress = FALSE)
