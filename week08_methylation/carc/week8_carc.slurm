@@ -15,7 +15,7 @@ module load ver/2506 gcc/14.3.0 r/4.5.0
 
 export R_LIBS_USER=/home1/alee4212/R/x86_64-pc-linux-gnu-library/4.5
 
-Rscript -e 'if (!requireNamespace("BiocManager", quietly=TRUE)) install.packages("BiocManager", repos="https://cloud.r-project.org"); BiocManager::install(c("limma", "DESeq2", "sesameData"), ask=FALSE, update=FALSE)'
+Rscript -e 'if (!requireNamespace("BiocManager", quietly=TRUE)) install.packages("BiocManager", repos="https://cloud.r-project.org"); BiocManager::install(c("limma", "DESeq2", "sesame", "sesameData"), ask=FALSE, update=FALSE)'
 
 pipeline=/home1/alee4212/qbio_490_austinlee/week08_methylation/carc/week8_carc_pipeline.R
 pipeline_log=/home1/alee4212/qbio_490_austinlee/week08_methylation/carc_results/carc_pipeline.log
